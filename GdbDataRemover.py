@@ -43,13 +43,59 @@ class GdbDataRemover:
         self.gdb_client = gdb_client
         self.limit = limit
 
-    def drop(self, label, drop_edge_only):
+    def drop(self, label, drop_edge_only, with_super_v):
         if label is None:
             self.__drop_all(True)
             if not drop_edge_only:
                 self.__drop_all(False)
+        elif with_super_v:
+            self.__drop_by_label_with_super_v(label)
         else:
             self.__drop_by_label(label, drop_edge_only)
+
+    def __drop_by_label_with_super_v(self, label):
+        label_params = {
+            "drop_label": label,
+        }
+        id_limit_params = {
+            "vid": "0",
+            "limit": self.limit
+        }
+        id_params = {
+            "vid": "0"
+        }
+        label_cnt_dsl = "g.V().hasLabel(drop_label).count()"
+        label_get_single_v_dsl = "g.V().hasLabel(drop_label).limit(1).id()"
+        label_drop_super_v_edges_dsl = "g.V(vid).bothE().limit(limit).sideEffect(drop()).count()"
+        label_drop_single_v_dsl = "g.V(vid).sideEffect(drop()).count()"
+
+        while True:
+            cnt_result = self.gdb_client.submit(label_cnt_dsl, label_params)
+            cnt = cnt_result.one()[0]
+
+            if 0 == cnt:
+                PrintUtil.rprint("current v cnt: %d, no need to drop" % cnt)
+                return 0
+            else:
+                PrintUtil.rprint("current v cnt: %d, continue to drop" % cnt)
+
+            curr_get_v_result = self.gdb_client.submit(label_get_single_v_dsl, label_params)
+            curr_get_v = curr_get_v_result.one()[0]
+            PrintUtil.rprint("current v: %s, %s" % (curr_get_v, type(curr_get_v)))
+            id_limit_params["vid"] = curr_get_v
+            id_params["vid"] = curr_get_v
+            while True:
+                curr_drop_e_result = self.gdb_client.submit(label_drop_super_v_edges_dsl, id_limit_params)
+                curr_dropped_e_cnt = curr_drop_e_result.one()[0]
+                if curr_dropped_e_cnt < self.limit:
+                    curr_drop_v_result = self.gdb_client.submit(label_drop_single_v_dsl, id_params)
+                    curr_drop_v_result_cnt = curr_drop_v_result.one()[0]
+                    PrintUtil.rprint("dropped vertex, v: %s, curr_drop_v_result_cnt: %d"
+                                     % (curr_get_v, curr_drop_v_result_cnt))
+                    break
+                else:
+                    PrintUtil.rprint("dropped edges, v: %s, curr_dropped_e_cnt: %d"
+                                     % (curr_get_v, curr_dropped_e_cnt))
 
     def __drop_all(self, drop_edge_only):
         marker = "E" if drop_edge_only else "V"
@@ -113,13 +159,15 @@ def main():
     parser.add_argument('--limit', dest="limit", type=int, default=500)
     parser.add_argument('--label', dest="label", type=str, default=None, help="drop element with specified label")
     parser.add_argument('--edge', dest="drop_edge_only", action="store_true", help="only drop edge")
+    parser.add_argument('--with_super_v', dest="with_super_v", action="store_true", help="drop vertex with super vertex")
 
     args = parser.parse_args()
 
     gdb_client = client.Client('ws://%s:%d/gremlin' % (args.host, args.port),
                                'g', username=args.username, password=args.password)
     gdb_data_remover = GdbDataRemover(gdb_client, args.limit)
-    gdb_data_remover.drop(args.label, args.drop_edge_only)
+    gdb_data_remover.drop(args.label, args.drop_edge_only, args.with_super_v)
+
 
 if __name__ == '__main__':
     main()
